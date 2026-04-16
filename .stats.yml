@@ -1,0 +1,4 @@
+configured_endpoints: 24
+openapi_spec_url: https://storage.googleapis.com/stainless-sdk-openapi-specs/okii%2Ffront-of-house-api-99118a21f5827c584d3147c22df430c9ceb4d04319dd3e78e3cede8e4412151a.yml
+openapi_spec_hash: 4793fa80675b7bd8aee0b8015680482f
+config_hash: 400dbd8b36e0abd6b8c33c270944dc20

@@ -1,0 +1,1614 @@
+openapi: 3.1.0
+info:
+  title: Front Of House Partner API
+  version: "2026-04-14"
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+  description: |
+    Partner and operator surface for the Front Of House AI-agent platform.
+
+    ## Authentication
+
+    All endpoints (except `/v1/console/auth/service-token`) require a bearer token
+    issued by the service-token endpoint. Pass it as:
+
+    ```
+    Authorization: Bearer <token>
+    ```
+
+    Most endpoints also require an org scope header:
+
+    ```
+    x-org-id: <org-uuid>
+    ```
+
+    ## Versioning
+
+    The API version is date-based (`YYYY-MM-DD`) and exposed via `API-Version`
+    response header. Breaking changes require a new date version after a minimum
+    90-day deprecation window. Additive changes (optional fields, new endpoints,
+    new enum values) may ship without version bump.
+
+    ## Stability guarantees
+
+    - Existing endpoint paths + methods are stable within a published version.
+    - Required request/response fields are stable within a published version.
+    - Optional fields may be added, but are not made required within the same version.
+    - Error envelope shape remains stable: `error` + optional `detail|details|remediation`.
+
+    ## Idempotency
+
+    For mutation endpoints (POST, PATCH, DELETE) that may be retried, pass an
+    idempotency key:
+
+    ```
+    Idempotency-Key: <unique-string>
+    ```
+
+    Keys are scoped per org and expire after 24 hours. Safe to retry on network
+    failures — the original response is returned without re-executing the action.
+
+    ## Error model
+
+    All error responses use the shape:
+
+    ```json
+    { "error": "<human-readable message>", "detail": { ... } }
+    ```
+
+    4xx errors include a `remediation` hint where actionable.
+
+servers:
+  - url: https://api.frontofhouse.okii.uk
+    description: Production
+
+tags:
+  - name: auth
+    description: Service-token authentication flow
+  - name: agents
+    description: Agent lifecycle — create, configure, publish, readiness
+  - name: leads
+    description: Lead management — handoff and field extraction
+  - name: conversations
+    description: Conversation feedback
+  - name: webhooks
+    description: Outbound webhook registration and delivery observability
+  - name: org
+    description: Organisation management and onboarding
+  - name: reporting
+    description: Turn traces and observability
+
+paths:
+
+  # ─── Auth ───────────────────────────────────────────────────────────────────
+
+  /v1/console/auth/service-token:
+    post:
+      operationId: getServiceToken
+      tags: [ auth ]
+      summary: Exchange email + password for a bearer token
+      description: |
+        Returns a short-lived JWT. Use this token as `Authorization: Bearer <token>`
+        on all subsequent requests. The CLI uses this endpoint — callers never
+        need to hold a Supabase service-role key.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ServiceTokenRequest'
+            example:
+              email: "operator@agency.com"
+              password: "s3cr3t12"
+      responses:
+        "200":
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceTokenResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/console/auth/my-orgs:
+    get:
+      operationId: listMyOrgs
+      tags: [ auth ]
+      summary: List orgs the authenticated user belongs to
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Org membership list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MyOrgsResponse'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  # ─── Agents ─────────────────────────────────────────────────────────────────
+
+  /v1/console/agents:
+    post:
+      operationId: createAgent
+      tags: [ agents ]
+      summary: Create a new agent
+      description: |
+        Creates an agent with a default policy draft. Requires `agents:write`
+        permission on the org. Subject to per-org plan agent limits.
+      security:
+        - bearerAuth: []
+        - orgId: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAgentRequest'
+            example:
+              name: "Buyer Enquiry Agent"
+              type: "custom"
+      responses:
+        "200":
+          description: Agent created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateAgentResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+
+    get:
+      operationId: listAgents
+      tags: [ agents ]
+      summary: List agents for the org
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+        - name: segment
+          in: query
+          description: Filter by lifecycle segment
+          schema:
+            type: string
+            enum: [ all, production, draft, simulation, archived ]
+            default: all
+      responses:
+        "200":
+          description: Agent list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListAgentsResponse'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/console/agents/{id}:
+    get:
+      operationId: getAgent
+      tags: [ agents ]
+      summary: Get a single agent
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AgentId'
+      responses:
+        "200":
+          description: Agent object
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
+  /v1/console/agents/{id}/draft:
+    get:
+      operationId: getAgentDraft
+      tags: [ agents ]
+      summary: Get an agent's current draft policy config
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AgentId'
+      responses:
+        "200":
+          description: Draft policy config object
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyDraft'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
+    patch:
+      operationId: updateAgentDraft
+      tags: [ agents ]
+      summary: Patch an agent's draft policy config
+      description: |
+        Merges the supplied fields into the existing draft. Top-level keys
+        overwrite existing values; nested keys are not deep-merged unless
+        documented. The `voice` key accepts speech-settings sub-fields
+        (`tts_provider`, `tts_voice_id`, `stt_provider`) as a convenience
+        alias. Returns the updated draft.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AgentId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchAgentDraftRequest'
+            example:
+              name: "Updated Agent Name"
+              greeting: "Hi, I'm your AI property consultant."
+              voice:
+                tts_provider: azure
+                tts_voice_id: en-GB-SoniaNeural:DragonHDOmniLatestNeural
+      responses:
+        "200":
+          description: Updated draft config
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyDraft'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/console/agents/{id}/validate:
+    post:
+      operationId: validateAgentDraft
+      tags: [ agents ]
+      summary: Validate a policy flow draft without publishing
+      description: |
+        Runs canonical schema validation and policy-graph checks. Returns errors
+        and warnings without mutating any state. Use before publish to surface
+        issues early.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AgentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidateDraftRequest'
+      responses:
+        "200":
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidateDraftResponse'
+        "400":
+          description: Validation failed — errors in response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidateDraftResponse'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/console/agents/{id}/publish:
+    post:
+      operationId: publishAgent
+      tags: [ agents ]
+      summary: Publish an agent draft behind fail-closed release gates
+      description: |
+        Runs simulation-cert and eval-loop gates before promoting the draft to
+        the live policy config. Fails closed if gates are not met. Returns the
+        published policy version on success.
+
+        **Gate requirements (production):**
+        - Passing simulation cert (`sim_cert_latest`) within `SIM_CERT_MAX_AGE_HOURS`.
+        - All locked invariants pass (`NoSilentDrop`, `ToolDeterminism`).
+
+        Admins/owners may supply `break_glass` to bypass with mandatory audit
+        trail written to `incident_loops`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AgentId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublishAgentRequest'
+      responses:
+        "200":
+          description: Agent published
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishAgentResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "409":
+          description: Gate not met — agent cannot be published
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GateFailureResponse'
+
+  /v1/console/agents/{id}/readiness:
+    get:
+      operationId: getAgentReadiness
+      tags: [ agents ]
+      summary: Return readiness badge contract for an agent
+      description: |
+        Returns the current readiness level and gate state for display in
+        operator dashboards or partner integrations. Non-blocking — always
+        returns 200 with the current state.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AgentId'
+      responses:
+        "200":
+          description: Readiness state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentReadiness'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
+  # ─── Leads ──────────────────────────────────────────────────────────────────
+
+  /v1/console/leads/{id}/handoff:
+    post:
+      operationId: handoffLead
+      tags: [ leads ]
+      summary: Hand off a lead to a human agent
+      description: |
+        Marks the lead as handed off and optionally assigns to a specific team
+        member. Emits a `lead.handoff` webhook event if configured. Idempotent
+        — repeated calls with the same reason return the current handoff state.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/LeadId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandoffRequest'
+            example:
+              reason: "Lead requested human callback"
+              assigned_to: null
+      responses:
+        "200":
+          description: Handoff recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandoffResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
+  /v1/console/leads/{id}/extraction:
+    patch:
+      operationId: updateLeadExtraction
+      tags: [ leads ]
+      summary: Update structured extraction fields for a lead
+      description: |
+        Merges incoming fields into the lead's `full_extraction` record. Empty
+        string values clear the corresponding field. Persists a diff of changed
+        fields and emits an `extraction_updated` event. Requires `leads:write`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/LeadId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateExtractionRequest'
+            example:
+              fields:
+                budget: "£300,000–£400,000"
+                timeframe: "3 months"
+                position: "first-time buyer"
+              summary: "First-time buyer seeking 2-bed flat in zone 2"
+              source: manual
+      responses:
+        "200":
+          description: Extraction updated; diff returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateExtractionResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
+  # ─── Conversations ───────────────────────────────────────────────────────────
+
+  /v1/console/conversations/{id}/feedback:
+    post:
+      operationId: submitConversationFeedback
+      tags: [ conversations ]
+      summary: Submit or update feedback for a conversation
+      description: |
+        Upserts feedback (rating + optional note) for a conversation. Only one
+        feedback record per conversation is stored — subsequent calls overwrite
+        the previous rating and note. Requires `leads:write` on the org that
+        owns the conversation.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+        - $ref: '#/components/parameters/OrgIdHeader'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationFeedbackRequest'
+            example:
+              rating: 1
+              note: "Agent missed the budget question"
+      responses:
+        "200":
+          description: Feedback recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationFeedbackResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
+    get:
+      operationId: getConversationFeedback
+      tags: [ conversations ]
+      summary: Get feedback for a conversation
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+        - $ref: '#/components/parameters/OrgIdHeader'
+      responses:
+        "200":
+          description: Feedback record or null
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetFeedbackResponse'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
+  # ─── Webhooks ────────────────────────────────────────────────────────────────
+
+  /v1/console/webhooks:
+    post:
+      operationId: registerWebhook
+      tags: [ webhooks ]
+      summary: Register an outbound webhook destination
+      description: |
+        Creates a webhook subscription for one or more event types. The supplied
+        `secret` is used to sign delivery payloads with HMAC-SHA256 so callers
+        can verify authenticity. Requires `agents:write`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterWebhookRequest'
+            example:
+              url: "https://your-crm.example.com/foh-webhook"
+              secret: "whsec_your_signing_secret"
+              events:
+                - lead.created
+                - lead.handoff
+                - agent.published
+      responses:
+        "200":
+          description: Webhook registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterWebhookResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+
+    get:
+      operationId: listWebhooks
+      tags: [ webhooks ]
+      summary: List registered webhook endpoints for the org
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      responses:
+        "200":
+          description: Webhook list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListWebhooksResponse'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/console/webhooks/{id}:
+    delete:
+      operationId: deleteWebhook
+      tags: [ webhooks ]
+      summary: Delete a webhook registration
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/WebhookId'
+        - $ref: '#/components/parameters/OrgIdHeader'
+      responses:
+        "200":
+          description: Webhook deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
+  /v1/console/webhooks/{id}/deliveries:
+    get:
+      operationId: getWebhookDeliveries
+      tags: [ webhooks ]
+      summary: Get delivery attempts for a webhook
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/WebhookId'
+        - $ref: '#/components/parameters/OrgIdHeader'
+      responses:
+        "200":
+          description: Delivery log
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookDeliveriesResponse'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
+  /v1/console/webhooks/observability:
+    get:
+      operationId: getWebhookObservability
+      tags: [ webhooks ]
+      summary: Delivery attempts, failure density, and backpressure metrics
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+        - name: hours
+          in: query
+          description: Lookback window in hours (1–168, default 24)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 168
+            default: 24
+      responses:
+        "200":
+          description: Webhook observability summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookObservabilityResponse'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  # ─── Org ─────────────────────────────────────────────────────────────────────
+
+  /v1/console/org:
+    post:
+      operationId: createOrg
+      tags: [ org ]
+      summary: Create a new organisation
+      description: |
+        Creates an org and automatically adds the authenticated user as admin.
+        If an org with the same name already exists the existing record is
+        returned with `note: already_exists`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrgRequest'
+            example:
+              name: "Acme Property Group"
+              plan: bronze
+      responses:
+        "200":
+          description: Org created (or existing org returned)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Org'
+        "201":
+          description: New org created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Org'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/console/org/{id}/onboarding:
+    get:
+      operationId: getOrgOnboarding
+      tags: [ org ]
+      summary: Get onboarding progress for an org
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Onboarding state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OnboardingState'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
+  /v1/console/org/{id}/members:
+    get:
+      operationId: listOrgMembers
+      tags: [ org ]
+      summary: List members of an org
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Member list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListMembersResponse'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/console/org/{id}/invite:
+    post:
+      operationId: inviteOrgMember
+      tags: [ org ]
+      summary: Invite a user to an org by email
+      description: |
+        The user must already have a FOH account (they must sign up first).
+        Upserts the membership — safe to call again if the user is already a
+        member.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InviteMemberRequest'
+            example:
+              email: "colleague@agency.com"
+              role: member
+      responses:
+        "200":
+          description: Member invited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InviteMemberResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          description: User not found — they must sign up first
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ─── Reporting ───────────────────────────────────────────────────────────────
+
+  /v1/console/traces:
+    get:
+      operationId: listTraces
+      tags: [ reporting ]
+      summary: List agent turn traces
+      description: |
+        Returns agent turn trace events in reverse chronological order.
+        Optionally scoped to a specific agent or conversation. Results are
+        capped at 200 per call — use `agentId` / `conversationId` filters
+        for targeted queries.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+        - name: agentId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: conversationId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          description: Max results (1–200, default 100)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 100
+      responses:
+        "200":
+          description: Trace list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListTracesResponse'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: JWT issued by `/v1/console/auth/service-token`
+    orgId:
+      type: apiKey
+      in: header
+      name: x-org-id
+      description: UUID of the org being accessed
+
+  parameters:
+    OrgIdHeader:
+      name: x-org-id
+      in: header
+      required: true
+      description: UUID of the target org
+      schema:
+        type: string
+        format: uuid
+
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Unique key for safe retries (scoped per org, 24-hour TTL)
+      schema:
+        type: string
+        maxLength: 255
+
+    AgentId:
+      name: id
+      in: path
+      required: true
+      description: Agent UUID
+      schema:
+        type: string
+        format: uuid
+
+    LeadId:
+      name: id
+      in: path
+      required: true
+      description: Lead UUID
+      schema:
+        type: string
+        format: uuid
+
+    ConversationId:
+      name: id
+      in: path
+      required: true
+      description: Conversation UUID
+      schema:
+        type: string
+        format: uuid
+
+    WebhookId:
+      name: id
+      in: path
+      required: true
+      description: Webhook registration UUID
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    BadRequest:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Missing or invalid bearer token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Caller lacks required org permission
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found or not accessible to the caller
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+
+    # ── Shared ─────────────────────────────────────────────────────────────────
+
+    ErrorResponse:
+      type: object
+      required: [ error ]
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
+        detail:
+          type: object
+          description: Structured detail (validation errors, etc.)
+          additionalProperties: true
+        remediation:
+          type: string
+          description: Actionable hint for fixing the error
+
+    OkResponse:
+      type: object
+      required: [ ok ]
+      properties:
+        ok:
+          type: boolean
+          enum: [ true ]
+
+    # ── Auth ───────────────────────────────────────────────────────────────────
+
+    ServiceTokenRequest:
+      type: object
+      required: [ email, password ]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+          minLength: 8
+
+    ServiceTokenResponse:
+      type: object
+      required: [ token, expires_at ]
+      properties:
+        token:
+          type: string
+          description: Bearer token for all subsequent requests
+        expires_at:
+          type: string
+          format: date-time
+          description: ISO-8601 expiry timestamp
+
+    MyOrgsResponse:
+      type: object
+      required: [ orgs ]
+      properties:
+        orgs:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrgMembership'
+
+    OrgMembership:
+      type: object
+      required: [ org_id, org_name, plan, role ]
+      properties:
+        org_id:
+          type: string
+          format: uuid
+        org_name:
+          type: string
+        plan:
+          type: string
+          enum: [ bronze, silver, gold ]
+        role:
+          type: string
+          enum: [ owner, admin, member, viewer ]
+
+    # ── Agents ─────────────────────────────────────────────────────────────────
+
+    Agent:
+      type: object
+      required: [ id, org_id, name, type, is_active, created_at, updated_at ]
+      properties:
+        id:
+          type: string
+          format: uuid
+        org_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        type:
+          type: string
+          enum: [ custom, inbound_buyer, inbound_landlord ]
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        sim_cert_at:
+          type: [ string, "null" ]
+          format: date-time
+          description: Timestamp of latest passing simulation cert
+
+    PolicyDraft:
+      type: object
+      description: |
+        Policy flow draft — free-form JSON conforming to the internal
+        FlowDraftSchema. Use `/v1/console/agents/{id}/validate` to check
+        validity before publishing. Top-level fields commonly used:
+        `greeting`, `goodbye`, `nodes`, `name`, `speech_settings`.
+      additionalProperties: true
+
+    CreateAgentRequest:
+      type: object
+      required: [ name ]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        type:
+          type: string
+          enum: [ custom, inbound_buyer, inbound_landlord ]
+          default: custom
+
+    CreateAgentResponse:
+      allOf:
+        - $ref: '#/components/schemas/OkResponse'
+        - type: object
+          required: [ agent ]
+          properties:
+            agent:
+              $ref: '#/components/schemas/Agent'
+
+    ListAgentsResponse:
+      type: object
+      required: [ agents ]
+      properties:
+        agents:
+          type: array
+          items:
+            $ref: '#/components/schemas/Agent'
+
+    PatchAgentDraftRequest:
+      type: object
+      description: Fields to merge into the existing draft
+      properties:
+        name:
+          type: string
+          description: Rename the agent
+        greeting:
+          type: string
+          description: Conversation opening message
+        goodbye:
+          type: string
+          description: Conversation close message
+        voice:
+          type: object
+          description: Speech settings shorthand
+          properties:
+            tts_provider:
+              type: string
+              enum: [ azure, openai, twilio, cartesia, elevenlabs ]
+            tts_voice_id:
+              type: string
+            stt_provider:
+              type: string
+      additionalProperties: true
+
+    ValidateDraftRequest:
+      type: object
+      required: [ flowDraft ]
+      properties:
+        flowDraft:
+          $ref: '#/components/schemas/PolicyDraft'
+
+    ValidateDraftResponse:
+      type: object
+      required: [ ok ]
+      properties:
+        ok:
+          type: boolean
+        errors:
+          type: array
+          items:
+            type: string
+        warnings:
+          type: array
+          items:
+            type: string
+
+    PublishAgentRequest:
+      type: object
+      properties:
+        break_glass:
+          type: object
+          description: Break-glass gate bypass — admin/owner only. Writes mandatory audit record.
+          required: [ reason, incident_id ]
+          properties:
+            reason:
+              type: string
+              minLength: 10
+            incident_id:
+              type: string
+              minLength: 1
+
+    PublishAgentResponse:
+      allOf:
+        - $ref: '#/components/schemas/OkResponse'
+        - type: object
+          properties:
+            version:
+              type: integer
+              description: Published policy version number
+            published_at:
+              type: string
+              format: date-time
+
+    GateFailureResponse:
+      type: object
+      required: [ error, gate ]
+      properties:
+        error:
+          type: string
+        gate:
+          type: string
+          enum: [ sim_cert, eval_loop ]
+          description: Which gate blocked publishing
+        detail:
+          type: object
+          additionalProperties: true
+
+    AgentReadiness:
+      type: object
+      required: [ agent_id, level ]
+      properties:
+        agent_id:
+          type: string
+          format: uuid
+        level:
+          type: string
+          enum: [ not_ready, sim_certified, published, live_ready ]
+        sim_cert_at:
+          type: [ string, "null" ]
+          format: date-time
+        is_active:
+          type: boolean
+        gates:
+          type: object
+          additionalProperties: true
+
+    # ── Leads ──────────────────────────────────────────────────────────────────
+
+    HandoffRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          description: Human-readable reason for handoff
+        assigned_to:
+          type: [ string, "null" ]
+          format: uuid
+          description: User UUID to assign to (null or omit for unassigned)
+
+    HandoffResponse:
+      type: object
+      required: [ ok ]
+      properties:
+        ok:
+          type: boolean
+        lead_id:
+          type: string
+          format: uuid
+        conversation_id:
+          type: [ string, "null" ]
+          format: uuid
+        assigned_to:
+          type: [ string, "null" ]
+          format: uuid
+
+    ExtractionFields:
+      type: object
+      description: |
+        Key-value pairs of extracted fields. Empty string clears the field.
+        Known keys: `budget`, `timeframe`, `position`, `property_ref`,
+        `name`, `email`, `phone`. Unknown keys are stored in `full_extraction`.
+      additionalProperties:
+        type: [ string, "null" ]
+
+    UpdateExtractionRequest:
+      type: object
+      properties:
+        fields:
+          $ref: '#/components/schemas/ExtractionFields'
+        summary:
+          type: string
+          description: Human-readable AI summary of the lead's intent
+        source:
+          type: string
+          enum: [ manual, ai, integration ]
+          default: manual
+        locked_fields:
+          type: array
+          items:
+            type: string
+          description: Fields locked from further AI overwrite
+
+    ExtractionDiff:
+      type: object
+      properties:
+        added:
+          type: object
+          additionalProperties: true
+        updated:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              from:
+                x-stainless-any: true
+              to:
+                x-stainless-any: true
+        removed:
+          type: array
+          items:
+            type: string
+
+    UpdateExtractionResponse:
+      allOf:
+        - $ref: '#/components/schemas/OkResponse'
+        - type: object
+          required: [ diff ]
+          properties:
+            diff:
+              $ref: '#/components/schemas/ExtractionDiff'
+
+    # ── Conversations ──────────────────────────────────────────────────────────
+
+    ConversationFeedbackRequest:
+      type: object
+      required: [ rating ]
+      properties:
+        rating:
+          type: integer
+          minimum: -1
+          maximum: 1
+          description: "-1 = negative, 0 = neutral, 1 = positive"
+        note:
+          type: [ string, "null" ]
+          maxLength: 2000
+
+    FeedbackRecord:
+      type: object
+      properties:
+        conversation_id:
+          type: string
+          format: uuid
+        org_id:
+          type: string
+          format: uuid
+        rating:
+          type: integer
+          minimum: -1
+          maximum: 1
+        note:
+          type: [ string, "null" ]
+        created_by:
+          type: string
+          format: uuid
+        updated_at:
+          type: string
+          format: date-time
+
+    ConversationFeedbackResponse:
+      allOf:
+        - $ref: '#/components/schemas/OkResponse'
+        - type: object
+          required: [ feedback ]
+          properties:
+            feedback:
+              $ref: '#/components/schemas/FeedbackRecord'
+
+    GetFeedbackResponse:
+      type: object
+      required: [ feedback ]
+      properties:
+        feedback:
+          oneOf:
+            - $ref: '#/components/schemas/FeedbackRecord'
+            - type: 'null'
+
+    # ── Webhooks ──────────────────────────────────────────────────────────────
+
+    WebhookEventType:
+      type: string
+      enum:
+        - lead.created
+        - lead.handoff
+        - lead.updated
+        - agent.published
+        - agent.rollback
+        - conversation.ended
+        - conversation.feedback_submitted
+      description: Webhook event types
+
+    RegisterWebhookRequest:
+      type: object
+      required: [ url, secret, events ]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: HTTPS endpoint to deliver events to
+        secret:
+          type: string
+          minLength: 16
+          description: HMAC-SHA256 signing secret for payload verification
+        events:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/WebhookEventType'
+
+    WebhookRegistration:
+      type: object
+      required: [ id, url, events, active, created_at ]
+      properties:
+        id:
+          type: string
+          format: uuid
+        url:
+          type: string
+          format: uri
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebhookEventType'
+        active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    RegisterWebhookResponse:
+      allOf:
+        - $ref: '#/components/schemas/OkResponse'
+        - type: object
+          required: [ webhook ]
+          properties:
+            webhook:
+              $ref: '#/components/schemas/WebhookRegistration'
+
+    ListWebhooksResponse:
+      type: object
+      required: [ webhooks ]
+      properties:
+        webhooks:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebhookRegistration'
+
+    WebhookDelivery:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        webhook_id:
+          type: string
+          format: uuid
+        event_type:
+          $ref: '#/components/schemas/WebhookEventType'
+        status:
+          type: string
+          enum: [ success, failed, retrying ]
+        response_status:
+          type: [ integer, "null" ]
+        attempt:
+          type: integer
+        delivered_at:
+          type: string
+          format: date-time
+
+    WebhookDeliveriesResponse:
+      type: object
+      required: [ deliveries ]
+      properties:
+        deliveries:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebhookDelivery'
+
+    WebhookObservabilityResponse:
+      type: object
+      properties:
+        total_attempts:
+          type: integer
+        success_count:
+          type: integer
+        failure_count:
+          type: integer
+        failure_rate:
+          type: number
+          format: float
+        backpressure_active:
+          type: boolean
+        hours:
+          type: integer
+
+    # ── Org ───────────────────────────────────────────────────────────────────
+
+    CreateOrgRequest:
+      type: object
+      required: [ name ]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        plan:
+          type: string
+          enum: [ bronze, silver, gold ]
+          default: bronze
+
+    Org:
+      type: object
+      required: [ id, name, plan ]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        plan:
+          type: string
+          enum: [ bronze, silver, gold ]
+        note:
+          type: string
+          enum: [ already_exists ]
+          description: Present when a pre-existing org was returned
+
+    OnboardingStep:
+      type: object
+      properties:
+        key:
+          type: string
+        label:
+          type: string
+        complete:
+          type: boolean
+
+    OnboardingState:
+      type: object
+      properties:
+        percent:
+          type: integer
+          minimum: 0
+          maximum: 100
+        isLiveReady:
+          type: boolean
+        phone_number:
+          type: [ string, "null" ]
+        provisioning_status:
+          type: [ string, "null" ]
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/OnboardingStep'
+
+    OrgMember:
+      type: object
+      required: [ user_id, role ]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [ owner, admin, member, viewer ]
+        created_at:
+          type: string
+          format: date-time
+
+    ListMembersResponse:
+      type: object
+      required: [ members ]
+      properties:
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrgMember'
+
+    InviteMemberRequest:
+      type: object
+      required: [ email, role ]
+      properties:
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [ admin, member, viewer ]
+          default: member
+
+    InviteMemberResponse:
+      type: object
+      required: [ status, user_id, role ]
+      properties:
+        status:
+          type: string
+          enum: [ invited ]
+        user_id:
+          type: string
+          format: uuid
+        role:
+          type: string
+
+    # ── Reporting ─────────────────────────────────────────────────────────────
+
+    TraceEvent:
+      type: object
+      required: [ id, org_id, event_type, created_at ]
+      properties:
+        id:
+          type: string
+          format: uuid
+        org_id:
+          type: string
+          format: uuid
+        agent_id:
+          type: [ string, "null" ]
+          format: uuid
+        conversation_id:
+          type: [ string, "null" ]
+          format: uuid
+        event_type:
+          type: string
+          enum: [ agent_input, agent_output, agent_step, tool_call, tool_response ]
+        payload:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+
+    ListTracesResponse:
+      type: object
+      required: [ traces ]
+      properties:
+        traces:
+          type: array
+          items:
+            $ref: '#/components/schemas/TraceEvent'
+
+security:
+  - bearerAuth: []

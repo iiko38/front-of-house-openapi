@@ -10,3 +10,10 @@ It is generated with [Stainless](https://www.stainless.com/).
 > This spec is primarily intended for Front Of House's internal use. Stability of the spec is not guaranteed.
 
 [**View the spec**](openapi.yml)
+
+## Clients
+
+Our official clients are generated from this spec:
+
+- [front-of-house-sdk-typescript](https://github.com/iiko38/front-of-house-sdk-typescript) (TypeScript)
+- [front-of-house-sdk-python](https://github.com/iiko38/front-of-house-sdk-python) (Python)

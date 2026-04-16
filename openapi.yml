@@ -142,7 +142,6 @@ paths:
         permission on the org. Subject to per-org plan agent limits.
       security:
         - bearerAuth: []
-        - orgId: []
       parameters:
         - $ref: '#/components/parameters/OrgIdHeader'
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -861,11 +860,6 @@ components:
       type: http
       scheme: bearer
       description: JWT issued by `/v1/console/auth/service-token`
-    orgId:
-      type: apiKey
-      in: header
-      name: x-org-id
-      description: UUID of the org being accessed
 
   parameters:
     OrgIdHeader:

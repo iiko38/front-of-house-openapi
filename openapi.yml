@@ -86,6 +86,7 @@ paths:
   /v1/console/auth/service-token:
     post:
       operationId: getServiceToken
+      security: []
       tags: [ auth ]
       summary: Exchange email + password for a bearer token
       description: |

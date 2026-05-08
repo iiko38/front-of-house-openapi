@@ -10,8 +10,8 @@ info:
 
     ## Authentication
 
-    All endpoints (except `/v1/console/auth/service-token`) require a bearer token
-    issued by the service-token endpoint. Pass it as:
+    All endpoints except auth bootstrap endpoints require a bearer token issued
+    by the service-token or browser device-auth flow. Pass it as:
 
     ```
     Authorization: Bearer <token>
@@ -71,13 +71,17 @@ tags:
   - name: leads
     description: Lead management — handoff and field extraction
   - name: conversations
-    description: Conversation feedback
+    description: Conversation operations (feedback and operator reply)
   - name: webhooks
     description: Outbound webhook registration and delivery observability
   - name: org
     description: Organisation management and onboarding
   - name: reporting
     description: Turn traces and observability
+  - name: channels
+    description: Channel onboarding and runtime readiness
+  - name: templates
+    description: Forkable agent templates and machine-readable template selection
 
 paths:
 
@@ -88,6 +92,48 @@ paths:
       operationId: getServiceToken
       tags: [ auth ]
       summary: Exchange email + password for a bearer token
+      x-codeSamples:
+        - lang: curl
+          label: curl
+          source: |
+            curl --request POST "$FOH_API_URL/v1/console/auth/service-token" \\n              --header "Content-Type: application/json" \\n              --data '{
+                "email": "operator@example.com",
+                "password": "replace-with-password"
+              }'
+        - lang: TypeScript
+          label: TypeScript SDK
+          source: |
+            import { FohClient, getServiceToken } from "@front-of-house/sdk";
+
+            const { token } = await getServiceToken(
+              "operator@example.com",
+              "replace-with-password",
+              process.env.FOH_API_URL,
+            );
+
+            const client = new FohClient({
+              token,
+              orgId: process.env.FOH_ORG_ID,
+              apiUrl: process.env.FOH_API_URL,
+            });
+        - lang: Python
+          label: Python SDK
+          source: |
+            import os
+            from front_of_house_sdk import FohClient, get_service_token
+
+            token_res = get_service_token(
+                "operator@example.com",
+                "replace-with-password",
+                api_url=os.environ["FOH_API_URL"],
+            )
+
+            client = FohClient(
+                token=token_res["token"],
+                org_id=os.environ.get("FOH_ORG_ID"),
+                api_url=os.environ["FOH_API_URL"],
+            )
+
       description: |
         Returns a short-lived JWT. Use this token as `Authorization: Bearer <token>`
         on all subsequent requests. The CLI uses this endpoint — callers never
@@ -130,6 +176,102 @@ paths:
         "401":
           $ref: '#/components/responses/Unauthorized'
 
+  /v1/console/auth/device/start:
+    post:
+      operationId: startCliDeviceAuth
+      tags: [ auth ]
+      summary: Start browser device authorization for the CLI
+      description: |
+        Starts a short-lived CLI login request. The CLI opens
+        `verification_uri_complete` in the browser, then polls
+        `/v1/console/auth/device/poll` until the signed-in console approves.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceAuthStartRequest'
+      responses:
+        "200":
+          description: Device authorization started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceAuthStartResponse'
+        "500":
+          $ref: '#/components/responses/ServerError'
+
+  /v1/console/auth/device/approve:
+    post:
+      operationId: approveCliDeviceAuth
+      tags: [ auth ]
+      summary: Approve a CLI device authorization request from the browser
+      security:
+        - bearerAuth: []
+      description: |
+        Called by the console `/cli-auth` page after normal Supabase sign-in.
+        The browser bearer token is stored against the pending device request
+        and can be consumed once by the polling CLI.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceAuthApproveRequest'
+      responses:
+        "200":
+          description: Device authorization approved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceAuthApproveResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "409":
+          $ref: '#/components/responses/Conflict'
+        "410":
+          $ref: '#/components/responses/Gone'
+
+  /v1/console/auth/device/poll:
+    post:
+      operationId: pollCliDeviceAuth
+      tags: [ auth ]
+      summary: Poll browser device authorization from the CLI
+      description: |
+        Polls a pending device request. Returns `202` while authorization is
+        pending, then returns a bearer token exactly once after browser approval.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceAuthPollRequest'
+      responses:
+        "200":
+          description: Device authorization approved and consumed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceAuthPollApprovedResponse'
+        "202":
+          description: Authorization pending
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceAuthPendingResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "409":
+          $ref: '#/components/responses/Conflict'
+        "410":
+          $ref: '#/components/responses/Gone'
+
   # ─── Agents ─────────────────────────────────────────────────────────────────
 
   /v1/console/agents:
@@ -137,6 +279,38 @@ paths:
       operationId: createAgent
       tags: [ agents ]
       summary: Create a new agent
+      x-codeSamples:
+        - lang: curl
+          label: curl
+          source: |
+            curl --request POST "$FOH_API_URL/v1/console/agents" \\n              --header "Authorization: Bearer $FOH_SERVICE_TOKEN" \\n              --header "x-org-id: $FOH_ORG_ID" \\n              --header "Idempotency-Key: create-agent-001" \\n              --header "Content-Type: application/json" \\n              --data '{
+                "name": "Buyer Enquiry Agent",
+                "type": "custom"
+              }'
+        - lang: TypeScript
+          label: TypeScript SDK
+          source: |
+            const created = await client.agents.create(
+              { name: "Buyer Enquiry Agent", type: "custom" },
+              "create-agent-001",
+            );
+        - lang: Python
+          label: Python SDK
+          source: |
+            import os
+            from front_of_house_sdk import FohClient
+
+            client = FohClient(
+                token=os.environ["FOH_SERVICE_TOKEN"],
+                org_id=os.environ["FOH_ORG_ID"],
+                api_url=os.environ["FOH_API_URL"],
+            )
+
+            created = client.agents.create(
+                {"name": "Buyer Enquiry Agent", "type": "custom"},
+                idempotency_key="create-agent-001",
+            )
+
       description: |
         Creates an agent with a default policy draft. Requires `agents:write`
         permission on the org. Subject to per-org plan agent limits.
@@ -245,6 +419,52 @@ paths:
       operationId: updateAgentDraft
       tags: [ agents ]
       summary: Patch an agent's draft policy config
+      x-codeSamples:
+        - lang: curl
+          label: curl
+          source: |
+            curl --request PATCH "$FOH_API_URL/v1/console/agents/$FOH_AGENT_ID/draft" \\n              --header "Authorization: Bearer $FOH_SERVICE_TOKEN" \\n              --header "x-org-id: $FOH_ORG_ID" \\n              --header "Idempotency-Key: patch-draft-001" \\n              --header "Content-Type: application/json" \\n              --data '{
+                "voice": {
+                  "tts_provider": "azure",
+                  "tts_voice_id": "en-GB-SoniaNeural:DragonHDOmniLatestNeural"
+                }
+              }'
+        - lang: TypeScript
+          label: TypeScript SDK
+          source: |
+            const draft = await client.agents.patchDraft(
+              process.env.FOH_AGENT_ID!,
+              {
+                voice: {
+                  tts_provider: "azure",
+                  tts_voice_id: "en-GB-SoniaNeural:DragonHDOmniLatestNeural",
+                },
+              },
+              "patch-draft-001",
+            );
+        - lang: Python
+          label: Python SDK
+          source: |
+            import os
+            from front_of_house_sdk import FohClient
+
+            client = FohClient(
+                token=os.environ["FOH_SERVICE_TOKEN"],
+                org_id=os.environ["FOH_ORG_ID"],
+                api_url=os.environ["FOH_API_URL"],
+            )
+
+            draft = client.agents.update_draft(
+                os.environ["FOH_AGENT_ID"],
+                {
+                    "voice": {
+                        "tts_provider": "azure",
+                        "tts_voice_id": "en-GB-SoniaNeural:DragonHDOmniLatestNeural",
+                    }
+                },
+                idempotency_key="patch-draft-001",
+            )
+
       description: |
         Merges the supplied fields into the existing draft. Top-level keys
         overwrite existing values; nested keys are not deep-merged unless
@@ -319,11 +539,76 @@ paths:
         "403":
           $ref: '#/components/responses/Forbidden'
 
+  /v1/console/agents/{id}/blueprint:
+    post:
+      operationId: compileAgentBlueprint
+      tags: [ agents ]
+      summary: Compile or apply a Conversation Blueprint v1 as an agent policy draft
+      description: |
+        Compiles the high-level Conversation Blueprint v1 authoring contract into
+        the current policy graph draft format. By default this is a dry compile.
+        Set `apply=true` to save the compiled draft as the agent's current draft,
+        then run validation, simulation certification, and publish.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AgentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompileAgentBlueprintRequest'
+      responses:
+        "200":
+          description: Compiled blueprint result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompileAgentBlueprintResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+
   /v1/console/agents/{id}/publish:
     post:
       operationId: publishAgent
       tags: [ agents ]
       summary: Publish an agent draft behind fail-closed release gates
+      x-codeSamples:
+        - lang: curl
+          label: curl
+          source: |
+            curl --request POST "$FOH_API_URL/v1/console/agents/$FOH_AGENT_ID/publish" \\n              --header "Authorization: Bearer $FOH_SERVICE_TOKEN" \\n              --header "x-org-id: $FOH_ORG_ID" \\n              --header "Idempotency-Key: publish-agent-001" \\n              --header "Content-Type: application/json" \\n              --data '{}'
+        - lang: TypeScript
+          label: TypeScript SDK
+          source: |
+            const publish = await client.agents.publish(
+              process.env.FOH_AGENT_ID!,
+              {},
+              "publish-agent-001",
+            );
+        - lang: Python
+          label: Python SDK
+          source: |
+            import os
+            from front_of_house_sdk import FohClient
+
+            client = FohClient(
+                token=os.environ["FOH_SERVICE_TOKEN"],
+                org_id=os.environ["FOH_ORG_ID"],
+                api_url=os.environ["FOH_API_URL"],
+            )
+
+            publish = client.agents.publish(
+                os.environ["FOH_AGENT_ID"],
+                {},
+                idempotency_key="publish-agent-001",
+            )
+
       description: |
         Runs simulation-cert and eval-loop gates before promoting the draft to
         the live policy config. Fails closed if gates are not met. Returns the
@@ -391,6 +676,116 @@ paths:
           $ref: '#/components/responses/NotFound'
 
   # ─── Leads ──────────────────────────────────────────────────────────────────
+
+  # Templates
+
+  /v1/console/templates:
+    get:
+      operationId: listTemplates
+      tags: [ templates ]
+      summary: List available agent templates
+      description: Lists system and customer templates available to the caller.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: category
+          in: query
+          required: false
+          description: Optional template category filter
+          schema:
+            $ref: '#/components/schemas/TemplateCategory'
+      responses:
+        "200":
+          description: Template list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListTemplatesResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/console/templates/select:
+    post:
+      operationId: selectTemplates
+      tags: [ templates ]
+      summary: Select candidate templates from a business requirement brief
+      description: Scores system templates against a machine-readable customer brief.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BusinessRequirementBrief'
+      responses:
+        "200":
+          description: Template selection result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateSelectionResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/console/templates/{id}:
+    get:
+      operationId: getTemplate
+      tags: [ templates ]
+      summary: Get a single template
+      description: Returns a template preview, including draft config when available.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TemplateId'
+      responses:
+        "200":
+          description: Template preview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetTemplateResponse'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
+  /v1/console/templates/{id}/apply:
+    post:
+      operationId: applyTemplate
+      tags: [ templates ]
+      summary: Create a draft agent from a template
+      description: Clones the selected template draft config into a new custom agent in the scoped org.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+        - $ref: '#/components/parameters/TemplateId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApplyTemplateRequest'
+      responses:
+        "200":
+          description: Agent created from template
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplyTemplateResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
 
   /v1/console/leads/{id}/handoff:
     post:
@@ -476,6 +871,130 @@ paths:
 
   # ─── Conversations ───────────────────────────────────────────────────────────
 
+  /v1/console/conversations/{id}/reply:
+    post:
+      operationId: replyToConversation
+      tags: [ conversations ]
+      summary: Queue an operator reply for a conversation
+      x-codeSamples:
+        - lang: curl
+          label: curl (WhatsApp/Instagram)
+          source: |
+            curl --request POST "$FOH_API_URL/v1/console/conversations/$FOH_CONVERSATION_ID/reply" \\n              --header "Authorization: Bearer $FOH_SERVICE_TOKEN" \\n              --header "x-org-id: $FOH_ORG_ID" \\n              --header "Idempotency-Key: reply-001" \\n              --header "Content-Type: application/json" \\n              --data '{
+                "content": "Human operator follow-up: we can do Tuesday at 10am.",
+                "source": "cli"
+              }'
+        - lang: TypeScript
+          label: TypeScript SDK
+          source: |
+            const reply = await client.conversations.reply(
+              process.env.FOH_CONVERSATION_ID!,
+              {
+                content: "Human operator follow-up: we can do Tuesday at 10am.",
+                source: "cli",
+              },
+              "reply-001",
+            );
+        - lang: Python
+          label: Python SDK
+          source: |
+            import os
+            from front_of_house_sdk import FohClient
+
+            client = FohClient(
+                token=os.environ["FOH_SERVICE_TOKEN"],
+                org_id=os.environ["FOH_ORG_ID"],
+                api_url=os.environ["FOH_API_URL"],
+            )
+
+            reply = client.conversations.reply(
+                os.environ["FOH_CONVERSATION_ID"],
+                {
+                    "content": "Human operator follow-up: we can do Tuesday at 10am.",
+                    "source": "cli",
+                },
+                idempotency_key="reply-001",
+            )
+
+      description: |
+        Persists an operator-authored assistant message and, when applicable,
+        enqueues external delivery on the channel-delivery queue.
+
+        Behavior:
+        - External channels (`whatsapp`, `instagram`) return `202` with
+          `delivery.status=queued`.
+        - Non-external channels (for example `widget`) return `200` with
+          `delivery.status=stored_only`.
+        - `Idempotency-Key` is required to prevent duplicate sends on retry.
+        - Fail-closed for malformed external thread IDs with `409` and
+          `code=conversation_reply_recipient_unresolved`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+        - $ref: '#/components/parameters/OrgIdHeader'
+        - $ref: '#/components/parameters/RequiredIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationReplyRequest'
+            examples:
+              whatsapp:
+                summary: Queue WhatsApp operator reply
+                value:
+                  content: "Thanks - I can call you back at 3pm."
+                  source: "console"
+              instagram:
+                summary: Queue Instagram DM operator reply
+                value:
+                  content: "Thanks for the DM - we have two flats available."
+                  source: "cli"
+      responses:
+        "202":
+          description: External delivery queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationReplyQueuedResponse'
+        "200":
+          description: Reply stored locally (no external channel delivery)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationReplyStoredResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "409":
+          description: External recipient could not be resolved from thread metadata
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ErrorResponse'
+                  - type: object
+                    properties:
+                      code:
+                        type: string
+                        enum: [ conversation_reply_recipient_unresolved ]
+        "503":
+          description: Delivery queue unavailable or enqueue failed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ErrorResponse'
+                  - type: object
+                    properties:
+                      code:
+                        type: string
+                        enum: [ conversation_reply_enqueue_failed ]
+
   /v1/console/conversations/{id}/feedback:
     post:
       operationId: submitConversationFeedback
@@ -543,6 +1062,47 @@ paths:
       operationId: registerWebhook
       tags: [ webhooks ]
       summary: Register an outbound webhook destination
+      x-codeSamples:
+        - lang: curl
+          label: curl
+          source: |
+            curl --request POST "$FOH_API_URL/v1/console/webhooks" \\n              --header "Authorization: Bearer $FOH_SERVICE_TOKEN" \\n              --header "x-org-id: $FOH_ORG_ID" \\n              --header "Idempotency-Key: webhook-register-001" \\n              --header "Content-Type: application/json" \\n              --data '{
+                "url": "https://example-crm.local/webhooks/foh",
+                "secret": "whsec_replace_me",
+                "events": ["lead.handoff", "conversation.feedback"]
+              }'
+        - lang: TypeScript
+          label: TypeScript SDK
+          source: |
+            const hook = await client.webhooks.register(
+              {
+                url: "https://example-crm.local/webhooks/foh",
+                secret: "whsec_replace_me",
+                events: ["lead.handoff", "conversation.feedback"],
+              },
+              "webhook-register-001",
+            );
+        - lang: Python
+          label: Python SDK
+          source: |
+            import os
+            from front_of_house_sdk import FohClient
+
+            client = FohClient(
+                token=os.environ["FOH_SERVICE_TOKEN"],
+                org_id=os.environ["FOH_ORG_ID"],
+                api_url=os.environ["FOH_API_URL"],
+            )
+
+            hook = client.webhooks.register(
+                {
+                    "url": "https://example-crm.local/webhooks/foh",
+                    "secret": "whsec_replace_me",
+                    "events": ["lead.handoff", "conversation.feedback"],
+                },
+                idempotency_key="webhook-register-001",
+            )
+
       description: |
         Creates a webhook subscription for one or more event types. The supplied
         `secret` is used to sign delivery payloads with HMAC-SHA256 so callers
@@ -648,6 +1208,29 @@ paths:
       operationId: getWebhookObservability
       tags: [ webhooks ]
       summary: Delivery attempts, failure density, and backpressure metrics
+      x-codeSamples:
+        - lang: curl
+          label: curl
+          source: |
+            curl --request GET "$FOH_API_URL/v1/console/webhooks/observability?hours=24" \\n              --header "Authorization: Bearer $FOH_SERVICE_TOKEN" \\n              --header "x-org-id: $FOH_ORG_ID"
+        - lang: TypeScript
+          label: TypeScript SDK
+          source: |
+            const obs = await client.webhooks.observability(24);
+        - lang: Python
+          label: Python SDK
+          source: |
+            import os
+            from front_of_house_sdk import FohClient
+
+            client = FohClient(
+                token=os.environ["FOH_SERVICE_TOKEN"],
+                org_id=os.environ["FOH_ORG_ID"],
+                api_url=os.environ["FOH_API_URL"],
+            )
+
+            obs = client.webhooks.observability()
+
       security:
         - bearerAuth: []
       parameters:
@@ -811,11 +1394,1069 @@ paths:
 
   # ─── Reporting ───────────────────────────────────────────────────────────────
 
+  /v1/console/channels/widget/ensure:
+    post:
+      operationId: ensureWidgetChannel
+      tags: [ channels ]
+      summary: Ensure widget channel exists for org/agent
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agentId:
+                  type: string
+      responses:
+        "200":
+          description: Widget channel ensured
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  channel:
+                    type: object
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/console/channels/whatsapp/connect:
+    post:
+      operationId: connectWhatsAppChannel
+      tags: [ channels ]
+      summary: Connect or update WhatsApp channel configuration
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ phoneNumberId, accessToken ]
+              properties:
+                phoneNumberId:
+                  type: string
+                accessToken:
+                  type: string
+                agentId:
+                  type: string
+                  format: uuid
+                  description: Optional agent to bind to this WhatsApp channel. When omitted, the org default FOH agent is used.
+                verifyToken:
+                  type: string
+                appSecret:
+                  type: string
+                audioEnabled:
+                  type: boolean
+      responses:
+        "200":
+          description: WhatsApp channel connected
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  channel:
+                    type: object
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
+  /v1/console/channels/whatsapp/status:
+    get:
+      operationId: getWhatsAppChannelStatus
+      tags: [ channels ]
+      summary: Get WhatsApp channel readiness status
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      responses:
+        "200":
+          description: WhatsApp channel status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  channel:
+                    type: object
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
+  /v1/console/channels/whatsapp/verify:
+    post:
+      operationId: verifyWhatsAppChannel
+      tags: [ channels ]
+      summary: Verify WhatsApp channel readiness contract
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                verifyToken:
+                  type: string
+      responses:
+        "200":
+          description: WhatsApp channel verified
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  code:
+                    type: string
+                  checks:
+                    type: object
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "409":
+          description: Channel configured but not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/console/channels/whatsapp/test:
+    post:
+      operationId: testWhatsAppChannel
+      tags: [ channels ]
+      summary: Run WhatsApp channel test check (dry-run by default)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                dryRun:
+                  type: boolean
+      responses:
+        "200":
+          description: Dry-run test passed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  code:
+                    type: string
+                  dry_run:
+                    type: boolean
+                  channel:
+                    type: object
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "409":
+          description: Channel configured but not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/console/channels/instagram/connect:
+    post:
+      operationId: connectInstagramChannel
+      tags: [ channels ]
+      summary: Connect or update Instagram channel configuration
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ accountId, accessToken ]
+              properties:
+                accountId:
+                  type: string
+                accessToken:
+                  type: string
+                verifyToken:
+                  type: string
+                appSecret:
+                  type: string
+      responses:
+        "200":
+          description: Instagram channel connected
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  channel:
+                    type: object
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/console/channels/instagram/status:
+    get:
+      operationId: getInstagramChannelStatus
+      tags: [ channels ]
+      summary: Get Instagram channel readiness status
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      responses:
+        "200":
+          description: Instagram channel status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  channel:
+                    type: object
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
+  /v1/console/channels/instagram/verify:
+    post:
+      operationId: verifyInstagramChannel
+      tags: [ channels ]
+      summary: Verify Instagram channel readiness contract
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                verifyToken:
+                  type: string
+      responses:
+        "200":
+          description: Instagram channel verified
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  code:
+                    type: string
+                  checks:
+                    type: object
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "409":
+          description: Channel configured but not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/console/channels/instagram/test:
+    post:
+      operationId: testInstagramChannel
+      tags: [ channels ]
+      summary: Run Instagram channel test check (dry-run by default)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                dryRun:
+                  type: boolean
+      responses:
+        "200":
+          description: Dry-run test passed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  code:
+                    type: string
+                  dry_run:
+                    type: boolean
+                  channel:
+                    type: object
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "409":
+          description: Channel configured but not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/console/voice/verify:
+    post:
+      operationId: verifyVoiceProvider
+      tags: [ voice ]
+      summary: Run voice verification lanes
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mode:
+                  type: string
+                  enum: [ quick, full, release ]
+      responses:
+        "200":
+          description: Voice verification result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  execution_ok:
+                    type: boolean
+                  artifact_path:
+                    type: string
+                  execution:
+                    type: object
+                  report:
+                    type: object
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/console/voice/reward:
+    post:
+      operationId: rewardVoiceProvider
+      tags: [ voice ]
+      summary: Generate voice reward report
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                days:
+                  type: integer
+                  minimum: 1
+                  maximum: 90
+                agent_id:
+                  type: string
+                  format: uuid
+                token_usage_window:
+                  type: integer
+                  minimum: 0
+                carrier_cost_usd:
+                  type: number
+                  minimum: 0
+      responses:
+        "200":
+          description: Voice reward report result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  artifact_path:
+                    type: string
+                  execution:
+                    type: object
+                  report:
+                    type: object
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/console/voice/optimize:
+    post:
+      operationId: optimizeVoiceProvider
+      tags: [ voice ]
+      summary: Generate voice optimization guidance
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reward_report_path:
+                  type: string
+                reward_days:
+                  type: integer
+                  minimum: 1
+                  maximum: 90
+                reward_agent_id:
+                  type: string
+                  format: uuid
+                reward_token_usage_window:
+                  type: integer
+                  minimum: 0
+                reward_carrier_cost_usd:
+                  type: number
+                  minimum: 0
+                azure_credit_usd:
+                  type: number
+                  minimum: 0
+                digitalocean_credit_usd:
+                  type: number
+                  minimum: 0
+                infra_provider:
+                  type: string
+                  enum: [ azure, digitalocean, other ]
+      responses:
+        "200":
+          description: Voice optimization result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  reward:
+                    type: object
+                  optimization:
+                    type: object
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/console/voice/scorecard:
+    post:
+      operationId: getVoiceScorecard
+      tags: [ voice ]
+      summary: Run voice scorecard recommendation flow
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                days:
+                  type: integer
+                  minimum: 1
+                  maximum: 30
+                runs:
+                  type: integer
+                  minimum: 1
+                  maximum: 10
+                verify_mode:
+                  type: string
+                  enum: [ full, release ]
+                azure_credit_usd:
+                  type: number
+                  minimum: 0
+                digitalocean_credit_usd:
+                  type: number
+                  minimum: 0
+                infra_provider:
+                  type: string
+                  enum: [ azure, digitalocean, other ]
+                allow_fail:
+                  type: boolean
+      responses:
+        "200":
+          description: Voice scorecard result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  execution_ok:
+                    type: boolean
+                  artifact_path:
+                    type: string
+                  execution:
+                    type: object
+                  report:
+                    type: object
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/console/speech/catalog:
+    get:
+      operationId: getSpeechCatalog
+      tags: [ voice ]
+      summary: Get speech provider and voice catalog
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Speech catalog response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  providers:
+                    type: object
+                    properties:
+                      tts:
+                        type: array
+                        items:
+                          type: string
+                      stt:
+                        type: array
+                        items:
+                          type: string
+                  models:
+                    type: array
+                    items:
+                      type: object
+                  voice_catalog:
+                    type: object
+                    properties:
+                      schema_version:
+                        type: string
+                      generated_at:
+                        type: string
+                      providers:
+                        type: array
+                        items:
+                          type: object
+                      voices:
+                        type: array
+                        items:
+                          type: object
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/console/speech/voice-catalog:
+    get:
+      operationId: getSpeechVoiceCatalog
+      tags: [ voice ]
+      summary: Get speech voice catalog snapshot
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Voice catalog response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  voice_catalog:
+                    type: object
+                    properties:
+                      schema_version:
+                        type: string
+                      generated_at:
+                        type: string
+                      providers:
+                        type: array
+                        items:
+                          type: object
+                      voices:
+                        type: array
+                        items:
+                          type: object
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/console/voice/preview:
+    get:
+      operationId: previewVoice
+      tags: [ voice ]
+      summary: Generate an MP3 preview for a provider voice
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: provider
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: voice_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Voice preview audio
+          content:
+            audio/mpeg:
+              schema:
+                type: string
+                format: binary
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "502":
+          description: Upstream provider synthesize failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/console/realtime/health:
+    get:
+      operationId: getRealtimeProviderHealth
+      tags: [ voice ]
+      summary: Get realtime provider health status
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Realtime providers healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        provider:
+                          type: string
+                        ready:
+                          type: boolean
+                        status:
+                          type: string
+                        detail:
+                          type: string
+        "503":
+          description: One or more realtime providers unhealthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      type: object
+
+  /v1/console/tools:
+    get:
+      operationId: listTools
+      tags: [ tools ]
+      summary: List global tools for org
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      responses:
+        "200":
+          description: Tool list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tools:
+                    type: array
+                    items:
+                      type: object
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/console/tools/{id}/test-connection:
+    post:
+      operationId: testToolConnection
+      tags: [ tools ]
+      summary: Test tool provider connection
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Tool connection is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  tool_id:
+                    type: string
+                  health_status:
+                    type: string
+                  code:
+                    type: string
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "503":
+          description: Tool endpoint unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/console/agents/{id}/tools/enable:
+    post:
+      operationId: enableAgentTool
+      tags: [ tools ]
+      summary: Enable a tool for an agent
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AgentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ tool_id ]
+              properties:
+                tool_id:
+                  type: string
+      responses:
+        "200":
+          description: Tool enabled for agent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  agent_id:
+                    type: string
+                  tool_id:
+                    type: string
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/console/agents/{id}/tools/disable:
+    post:
+      operationId: disableAgentTool
+      tags: [ tools ]
+      summary: Disable a tool for an agent
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AgentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ tool_id ]
+              properties:
+                tool_id:
+                  type: string
+      responses:
+        "200":
+          description: Tool disabled for agent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  agent_id:
+                    type: string
+                  tool_id:
+                    type: string
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/knowledge/documents:
+    get:
+      operationId: listKnowledgeDocuments
+      tags: [ knowledge ]
+      summary: List knowledge documents
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+        - name: agent_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Knowledge document list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                  source:
+                    type: string
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      operationId: createKnowledgeDocument
+      tags: [ knowledge ]
+      summary: Create a knowledge document
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ name, source_type, source_value ]
+              properties:
+                name:
+                  type: string
+                source_type:
+                  type: string
+                source_value:
+                  type: string
+                agent_id:
+                  type: string
+                  format: uuid
+                metadata:
+                  type: object
+      responses:
+        "200":
+          description: Knowledge document created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                  source:
+                    type: string
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/knowledge/documents/{id}:
+    delete:
+      operationId: deleteKnowledgeDocument
+      tags: [ knowledge ]
+      summary: Delete a knowledge document
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Knowledge document deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
+  /v1/knowledge/documents/{id}/reindex:
+    post:
+      operationId: reindexKnowledgeDocument
+      tags: [ knowledge ]
+      summary: Reindex a knowledge document
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Knowledge reindex queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  status:
+                    type: string
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
   /v1/console/traces:
     get:
       operationId: listTraces
       tags: [ reporting ]
       summary: List agent turn traces
+      x-codeSamples:
+        - lang: curl
+          label: curl
+          source: |
+            curl --request GET "$FOH_API_URL/v1/console/traces?limit=100" \\n              --header "Authorization: Bearer $FOH_SERVICE_TOKEN" \\n              --header "x-org-id: $FOH_ORG_ID"
+        - lang: TypeScript
+          label: TypeScript SDK
+          source: |
+            const traces = await client.reporting.listTraces({
+              limit: 100,
+            });
+        - lang: Python
+          label: Python SDK
+          source: |
+            import os
+            from front_of_house_sdk import FohClient
+
+            client = FohClient(
+                token=os.environ["FOH_SERVICE_TOKEN"],
+                org_id=os.environ["FOH_ORG_ID"],
+                api_url=os.environ["FOH_API_URL"],
+            )
+
+            traces = client.traces.list()
+
       description: |
         Returns agent turn trace events in reverse chronological order.
         Optionally scoped to a specific agent or conversation. Results are
@@ -880,6 +2521,15 @@ components:
         type: string
         maxLength: 255
 
+    RequiredIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Required unique key for safe retries (scoped per org, 24-hour TTL)
+      schema:
+        type: string
+        maxLength: 255
+
     AgentId:
       name: id
       in: path
@@ -916,6 +2566,14 @@ components:
         type: string
         format: uuid
 
+    TemplateId:
+      name: id
+      in: path
+      required: true
+      description: Template ID or slug
+      schema:
+        type: string
+
   responses:
     BadRequest:
       description: Request validation failed
@@ -937,6 +2595,24 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
     NotFound:
       description: Resource not found or not accessible to the caller
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Resource state conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Gone:
+      description: Resource has expired or is no longer available
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ServerError:
+      description: Internal server error
       content:
         application/json:
           schema:
@@ -995,6 +2671,92 @@ components:
           format: date-time
           description: ISO-8601 expiry timestamp
 
+    DeviceAuthStartRequest:
+      type: object
+      properties:
+        client:
+          type: string
+          description: Optional client label for diagnostics
+
+    DeviceAuthStartResponse:
+      type: object
+      required: [ device_code, user_code, verification_uri, verification_uri_complete, expires_in, interval ]
+      properties:
+        device_code:
+          type: string
+          description: High-entropy secret used only by the CLI poller
+        user_code:
+          type: string
+          example: ABCD-2345
+        verification_uri:
+          type: string
+          format: uri
+        verification_uri_complete:
+          type: string
+          format: uri
+        expires_in:
+          type: integer
+          example: 600
+        interval:
+          type: integer
+          example: 2
+
+    DeviceAuthApproveRequest:
+      type: object
+      properties:
+        device_code:
+          type: string
+        user_code:
+          type: string
+          example: ABCD-2345
+      anyOf:
+        - required: [ device_code ]
+        - required: [ user_code ]
+
+    DeviceAuthApproveResponse:
+      type: object
+      required: [ status, expires_at ]
+      properties:
+        status:
+          type: string
+          enum: [ approved ]
+        user_code:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+
+    DeviceAuthPollRequest:
+      type: object
+      required: [ device_code ]
+      properties:
+        device_code:
+          type: string
+
+    DeviceAuthPendingResponse:
+      type: object
+      required: [ status, code ]
+      properties:
+        status:
+          type: string
+          enum: [ authorization_pending ]
+        code:
+          type: string
+          enum: [ authorization_pending ]
+
+    DeviceAuthPollApprovedResponse:
+      type: object
+      required: [ status, token, expires_at ]
+      properties:
+        status:
+          type: string
+          enum: [ approved ]
+        token:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+
     MyOrgsResponse:
       type: object
       required: [ orgs ]
@@ -1015,7 +2777,7 @@ components:
           type: string
         plan:
           type: string
-          enum: [ bronze, silver, gold ]
+          enum: [ bronze, silver, gold, internal ]
         role:
           type: string
           enum: [ owner, admin, member, viewer ]
@@ -1090,6 +2852,178 @@ components:
           items:
             $ref: '#/components/schemas/Agent'
 
+    # Templates
+
+    TemplateCategory:
+      type: string
+      enum: [ buyer, seller, landlord, commercial ]
+
+    Template:
+      type: object
+      required: [ id, name, category, description ]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        category:
+          $ref: '#/components/schemas/TemplateCategory'
+        description:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        draft_config:
+          type: object
+          additionalProperties: true
+        is_system:
+          type: boolean
+        recommended_for:
+          type: array
+          items:
+            type: string
+        certification_profile:
+          type: string
+        template_contract:
+          type: object
+          additionalProperties: true
+      additionalProperties: true
+
+    ListTemplatesResponse:
+      type: object
+      required: [ templates ]
+      properties:
+        templates:
+          type: array
+          items:
+            $ref: '#/components/schemas/Template'
+
+    GetTemplateResponse:
+      type: object
+      required: [ template ]
+      properties:
+        template:
+          $ref: '#/components/schemas/Template'
+
+    KnowledgeSource:
+      type: object
+      required: [ type, label ]
+      properties:
+        type:
+          type: string
+          enum: [ website, document, manual_text, crm, property_feed ]
+        label:
+          type: string
+        uri:
+          type: string
+
+    BusinessRequirementBrief:
+      type: object
+      required: [ schema_version, business_name, industry, desired_use_cases, channels, required_outcomes ]
+      properties:
+        schema_version:
+          type: string
+          enum: [ business_requirement_brief.v1 ]
+        business_name:
+          type: string
+        industry:
+          type: string
+          enum: [ real_estate, general ]
+        desired_use_cases:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        channels:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum: [ widget, voice, whatsapp, instagram, sms ]
+        knowledge_sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/KnowledgeSource'
+        required_outcomes:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        handoff_rules:
+          type: array
+          items:
+            type: string
+        constraints:
+          type: array
+          items:
+            type: string
+        optimization_target:
+          type: string
+          enum: [ lead_quality, booking_rate, speed_to_lead, support_resolution, cost_efficiency ]
+          default: lead_quality
+
+    TemplateMissingInput:
+      type: object
+      required: [ key, label, source ]
+      properties:
+        key:
+          type: string
+        label:
+          type: string
+        source:
+          type: string
+
+    TemplateSelectionCandidate:
+      type: object
+      required: [ template, match_score, matched_reasons, missing_inputs, next_commands ]
+      properties:
+        template:
+          $ref: '#/components/schemas/Template'
+        match_score:
+          type: number
+        matched_reasons:
+          type: array
+          items:
+            type: string
+        missing_inputs:
+          type: array
+          items:
+            $ref: '#/components/schemas/TemplateMissingInput'
+        next_commands:
+          type: array
+          items:
+            type: string
+
+    TemplateSelectionResponse:
+      type: object
+      required: [ schema_version, candidates ]
+      properties:
+        schema_version:
+          type: string
+          enum: [ template_selection.v1 ]
+        candidates:
+          type: array
+          items:
+            $ref: '#/components/schemas/TemplateSelectionCandidate'
+
+    ApplyTemplateRequest:
+      type: object
+      required: [ name ]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+
+    ApplyTemplateResponse:
+      allOf:
+        - $ref: '#/components/schemas/OkResponse'
+        - type: object
+          required: [ agent ]
+          properties:
+            agent:
+              $ref: '#/components/schemas/Agent'
+
     PatchAgentDraftRequest:
       type: object
       description: Fields to merge into the existing draft
@@ -1109,7 +3043,7 @@ components:
           properties:
             tts_provider:
               type: string
-              enum: [ azure, openai, twilio, cartesia, elevenlabs ]
+              enum: [ azure, openai, twilio, cartesia, elevenlabs, xai ]
             tts_voice_id:
               type: string
             stt_provider:
@@ -1137,6 +3071,200 @@ components:
           type: array
           items:
             type: string
+
+    ConversationBlueprintV1:
+      type: object
+      required:
+        - schema_version
+        - name
+        - objective
+        - audience
+        - persona
+        - channel_policy
+        - turn_taking_policy
+        - phases
+        - tool_policy
+        - escalation_policy
+        - close_policy
+        - evaluation_scenarios
+      properties:
+        schema_version:
+          type: string
+          enum: [ conversation_blueprint.v1 ]
+        name:
+          type: string
+        objective:
+          type: string
+        audience:
+          type: string
+        persona:
+          type: object
+          required: [ role, brand_voice ]
+          properties:
+            role:
+              type: string
+            brand_voice:
+              type: string
+            boundaries:
+              type: array
+              items:
+                type: string
+        channel_policy:
+          type: object
+          properties:
+            primary:
+              type: string
+              enum: [ widget, voice, whatsapp, instagram, sms ]
+            allowed:
+              type: array
+              items:
+                type: string
+                enum: [ widget, voice, whatsapp, instagram, sms ]
+            voice_style:
+              type: string
+              enum: [ concise, natural, guided ]
+            async_follow_up:
+              type: boolean
+        turn_taking_policy:
+          type: object
+          properties:
+            max_questions_per_turn:
+              type: integer
+              minimum: 1
+              maximum: 3
+            interruption_style:
+              type: string
+              enum: [ brief_acknowledge_then_continue, stop_and_answer, defer ]
+            repair_strategy:
+              type: string
+              enum: [ ask_clarifying_question, offer_menu, handoff ]
+        phases:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [ id, label, goal, success_signal ]
+            properties:
+              id:
+                type: string
+              label:
+                type: string
+              goal:
+                type: string
+              success_signal:
+                type: string
+              required_slots:
+                type: array
+                items:
+                  type: string
+        slots:
+          type: array
+          items:
+            type: object
+            required: [ key, label, ask_when_missing ]
+            properties:
+              key:
+                type: string
+              label:
+                type: string
+              required:
+                type: boolean
+              ask_when_missing:
+                type: string
+        tool_policy:
+          type: object
+          properties:
+            allowed_tools:
+              type: array
+              items:
+                type: string
+            require_confirmation_before:
+              type: array
+              items:
+                type: string
+            failure_mode:
+              type: string
+              enum: [ apologize_and_continue, handoff, retry_once ]
+        escalation_policy:
+          type: object
+          properties:
+            triggers:
+              type: array
+              items:
+                type: string
+            handoff_message:
+              type: string
+        close_policy:
+          type: object
+          required: [ success_outcome, follow_up_message ]
+          properties:
+            success_outcome:
+              type: string
+            follow_up_message:
+              type: string
+        evaluation_scenarios:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [ id, user_goal ]
+            properties:
+              id:
+                type: string
+              channel:
+                type: string
+                enum: [ widget, voice, whatsapp, instagram, sms ]
+              user_goal:
+                type: string
+              must_collect:
+                type: array
+                items:
+                  type: string
+              must_not_do:
+                type: array
+                items:
+                  type: string
+
+    CompileAgentBlueprintRequest:
+      type: object
+      required: [ blueprint ]
+      properties:
+        blueprint:
+          $ref: '#/components/schemas/ConversationBlueprintV1'
+        apply:
+          type: boolean
+          default: false
+
+    CompileAgentBlueprintResponse:
+      type: object
+      required: [ ok, applied, authoring_model, draft_hash, validation, draft ]
+      properties:
+        ok:
+          type: boolean
+        applied:
+          type: boolean
+        authoring_model:
+          type: string
+          enum: [ conversation_blueprint.v1 ]
+        draft_hash:
+          type: string
+        validation:
+          type: object
+          properties:
+            valid:
+              type: boolean
+            errors:
+              type: array
+              items:
+                type: string
+            warnings:
+              type: array
+              items:
+                type: string
+            confidence:
+              type: number
+        draft:
+          $ref: '#/components/schemas/PolicyDraft'
 
     PublishAgentRequest:
       type: object
@@ -1284,6 +3412,74 @@ components:
               $ref: '#/components/schemas/ExtractionDiff'
 
     # ── Conversations ──────────────────────────────────────────────────────────
+
+    ConversationReplyRequest:
+      type: object
+      required: [ content ]
+      properties:
+        content:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        source:
+          type: string
+          enum: [ console, cli, api ]
+        metadata:
+          type: object
+          additionalProperties: true
+
+    ConversationReplyDelivery:
+      type: object
+      required: [ id, status, transport, recipient ]
+      properties:
+        id:
+          type: [ string, 'null' ]
+        status:
+          type: string
+          enum: [ queued, stored_only ]
+        transport:
+          type: string
+          description: Channel transport key (`whatsapp`, `instagram_dm`, `widget`, etc.).
+        recipient:
+          type: [ string, 'null' ]
+
+    ConversationReplyQueuedResponse:
+      allOf:
+        - $ref: '#/components/schemas/OkResponse'
+        - type: object
+          required: [ delivery ]
+          properties:
+            delivery:
+              allOf:
+                - $ref: '#/components/schemas/ConversationReplyDelivery'
+                - type: object
+                  properties:
+                    status:
+                      type: string
+                      enum: [ queued ]
+                    id:
+                      type: string
+                    recipient:
+                      type: string
+
+    ConversationReplyStoredResponse:
+      allOf:
+        - $ref: '#/components/schemas/OkResponse'
+        - type: object
+          required: [ delivery ]
+          properties:
+            delivery:
+              allOf:
+                - $ref: '#/components/schemas/ConversationReplyDelivery'
+                - type: object
+                  properties:
+                    status:
+                      type: string
+                      enum: [ stored_only ]
+                    id:
+                      type: 'null'
+                    recipient:
+                      type: 'null'
 
     ConversationFeedbackRequest:
       type: object
@@ -1485,7 +3681,7 @@ components:
           type: string
         plan:
           type: string
-          enum: [ bronze, silver, gold ]
+          enum: [ bronze, silver, gold, internal ]
         note:
           type: string
           enum: [ already_exists ]

@@ -754,6 +754,128 @@ paths:
         "404":
           $ref: '#/components/responses/NotFound'
 
+  /v1/console/templates/{id}/capabilities:
+    get:
+      operationId: getTemplateCapabilities
+      tags: [ templates ]
+      summary: Get machine-readable template capabilities
+      description: Returns delivery/tool/voice capability metadata for deterministic AI-agent planning.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TemplateId'
+      responses:
+        "200":
+          description: Template capability report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetTemplateCapabilitiesResponse'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
+  /v1/console/templates/{id}/proof-plan:
+    post:
+      operationId: getTemplateProofPlan
+      tags: [ templates ]
+      summary: Expand template proof gates into concrete commands
+      description: Returns a machine-readable proof plan for an applied template agent.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TemplateId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TemplateProofPlanRequest'
+      responses:
+        "200":
+          description: Template proof plan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetTemplateProofPlanResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
+  /v1/console/templates/{id}/fork:
+    post:
+      operationId: forkTemplate
+      tags: [ templates ]
+      summary: Fork a template with explicit lineage and contract diff
+      description: Creates an org-scoped forked template and returns contract diff metadata.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+        - $ref: '#/components/parameters/TemplateId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TemplateForkRequest'
+      responses:
+        "200":
+          description: Fork created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateForkResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "422":
+          $ref: '#/components/responses/UnprocessableEntity'
+
+  /v1/console/templates/{id}/publish-helper:
+    post:
+      operationId: publishTemplateHelper
+      tags: [ templates ]
+      summary: Validate template-linked evidence before publish
+      description: Consumes machine-readable template evidence and returns publish readiness for an applied agent.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+        - $ref: '#/components/parameters/TemplateId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TemplatePublishHelperRequest'
+      responses:
+        "200":
+          description: Evidence validated and publish-ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplatePublishHelperResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "409":
+          $ref: '#/components/responses/Conflict'
+
   /v1/console/templates/{id}/apply:
     post:
       operationId: applyTemplate
@@ -2973,9 +3095,138 @@ components:
         source:
           type: string
 
+    TemplateToolAvailabilityMatrixRow:
+      type: object
+      required: [ tool_id, declared_required, expected_evidence_surfaces, happy_path_scenario_ids, failure_or_fallback_scenario_ids ]
+      properties:
+        tool_id:
+          type: string
+        declared_required:
+          type: boolean
+        expected_evidence_surfaces:
+          type: array
+          items:
+            type: string
+            enum: [ api, cli, sdk, transcript, proof_report ]
+        happy_path_scenario_ids:
+          type: array
+          items:
+            type: string
+        failure_or_fallback_scenario_ids:
+          type: array
+          items:
+            type: string
+
+    TemplateVoiceOption:
+      type: object
+      required: [ option_id, provider, voice, language, selection_priority, supports_no_spend ]
+      properties:
+        option_id:
+          type: string
+        provider:
+          type: string
+        voice:
+          type: string
+        language:
+          type: string
+        accent:
+          type: string
+        selection_priority:
+          type: integer
+          minimum: 1
+        supports_no_spend:
+          type: boolean
+
+    TemplateVoiceFallback:
+      type: object
+      required: [ from_option_id, mode, reason_code ]
+      properties:
+        from_option_id:
+          type: string
+        to_option_id:
+          type: string
+        mode:
+          type: string
+          enum: [ fallback_option, expected_hold ]
+        reason_code:
+          type: string
+
+    TemplateSelectionCapabilities:
+      type: object
+      required: [ schema_version, template_id, template_slug, use_case, delivery_mechanisms, tools, voice, proof_gates ]
+      properties:
+        schema_version:
+          type: string
+          enum: [ template_selection_capabilities.v1 ]
+        template_id:
+          type: string
+        template_slug:
+          type: string
+        use_case:
+          type: string
+        delivery_mechanisms:
+          type: array
+          items:
+            type: string
+            enum: [ widget, voice, whatsapp, instagram, sms ]
+        tools:
+          type: object
+          required: [ total_declared, required_count, ids, availability_matrix ]
+          properties:
+            total_declared:
+              type: integer
+            required_count:
+              type: integer
+            ids:
+              type: array
+              items:
+                type: string
+            availability_matrix:
+              type: array
+              items:
+                $ref: '#/components/schemas/TemplateToolAvailabilityMatrixRow'
+        voice:
+          type: object
+          required: [ enabled, no_spend_semantics, expected_hold_reason_codes, options, fallback_chain ]
+          properties:
+            enabled:
+              type: boolean
+            no_spend_semantics:
+              type: string
+              enum: [ expected_hold, not_supported ]
+            expected_hold_reason_codes:
+              type: array
+              items:
+                type: string
+            options:
+              type: array
+              items:
+                $ref: '#/components/schemas/TemplateVoiceOption'
+            fallback_chain:
+              type: array
+              items:
+                $ref: '#/components/schemas/TemplateVoiceFallback'
+        proof_gates:
+          type: array
+          items:
+            type: object
+            required: [ id, channels, required ]
+            properties:
+              id:
+                type: string
+              channels:
+                type: array
+                items:
+                  type: string
+                  enum: [ widget, voice, whatsapp, instagram, sms ]
+              required:
+                type: boolean
+              command:
+                type: string
+
     TemplateSelectionCandidate:
       type: object
-      required: [ template, match_score, matched_reasons, missing_inputs, next_commands ]
+      required: [ template, match_score, matched_reasons, missing_inputs, capabilities, next_commands ]
       properties:
         template:
           $ref: '#/components/schemas/Template'
@@ -2989,6 +3240,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/TemplateMissingInput'
+        capabilities:
+          $ref: '#/components/schemas/TemplateSelectionCapabilities'
         next_commands:
           type: array
           items:
@@ -3005,6 +3258,237 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/TemplateSelectionCandidate'
+
+    GetTemplateCapabilitiesResponse:
+      type: object
+      required: [ capabilities ]
+      properties:
+        capabilities:
+          $ref: '#/components/schemas/TemplateSelectionCapabilities'
+
+    TemplateProofPlanRequest:
+      type: object
+      required: [ agent_id ]
+      properties:
+        agent_id:
+          type: string
+
+    TemplateProofPlan:
+      type: object
+      required: [ schema_version, template_id, template_slug, template_name, use_case, agent_id, outcome, lineage, commands, next_commands ]
+      properties:
+        schema_version:
+          type: string
+          enum: [ template_proof_plan.v1 ]
+        template_id:
+          type: string
+        template_slug:
+          type: string
+        template_name:
+          type: string
+        use_case:
+          type: string
+        agent_id:
+          type: string
+        outcome:
+          type: object
+          required: [ primary_outcome, required_lead_fields ]
+          properties:
+            primary_outcome:
+              type: string
+            required_lead_fields:
+              type: array
+              items:
+                type: string
+        lineage:
+          type: object
+          required: [ source_template_id, source_template_slug, clone_mode ]
+          properties:
+            source_template_id:
+              type: string
+            source_template_slug:
+              type: string
+            clone_mode:
+              type: string
+        commands:
+          type: array
+          items:
+            type: object
+            required: [ gate_id, mission, command, expected_status, pass_criteria ]
+            properties:
+              gate_id:
+                type: string
+              mission:
+                type: string
+                enum: [ widget, voice, certification, other ]
+              command:
+                type: string
+              expected_status:
+                type: string
+                enum: [ pass, pass_or_expected_hold ]
+              environment:
+                type: object
+                additionalProperties:
+                  type: string
+              accepted_hold_reason_codes:
+                type: array
+                items:
+                  type: string
+              pass_criteria:
+                type: array
+                items:
+                  type: string
+        next_commands:
+          type: array
+          items:
+            type: string
+
+    GetTemplateProofPlanResponse:
+      type: object
+      required: [ plan ]
+      properties:
+        plan:
+          $ref: '#/components/schemas/TemplateProofPlan'
+
+    TemplateForkRequest:
+      type: object
+      required: [ name ]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+        category:
+          $ref: '#/components/schemas/TemplateCategory'
+        contract:
+          type: object
+          additionalProperties: true
+
+    TemplateForkResponse:
+      type: object
+      required: [ schema_version, template, diff ]
+      properties:
+        schema_version:
+          type: string
+          enum: [ template_fork.v1 ]
+        template:
+          type: object
+          required: [ id, source_template_id, name, category, description, template_contract, lineage ]
+          properties:
+            id:
+              type: string
+            source_template_id:
+              type: string
+            name:
+              type: string
+            category:
+              $ref: '#/components/schemas/TemplateCategory'
+            description:
+              type: string
+            template_contract:
+              type: object
+              additionalProperties: true
+            lineage:
+              type: object
+              additionalProperties: true
+        diff:
+          type: object
+          required: [ changed_keys, customizable_changes, preserved_changes, preserved_fields ]
+          properties:
+            changed_keys:
+              type: array
+              items:
+                type: string
+            customizable_changes:
+              type: array
+              items:
+                type: string
+            preserved_changes:
+              type: array
+              items:
+                type: string
+            preserved_fields:
+              type: array
+              items:
+                type: string
+
+    TemplatePublishEvidence:
+      type: object
+      required: [ schema_version, template_id, applied_proof_status, day_end_status, use_case_score_verdict ]
+      properties:
+        schema_version:
+          type: string
+          enum: [ template_publish_evidence.v1 ]
+        template_id:
+          type: string
+        template_slug:
+          type: string
+        applied_proof_status:
+          type: string
+          enum: [ passed, failed ]
+        day_end_status:
+          type: string
+          enum: [ passed, failed ]
+        use_case_score_verdict:
+          type: string
+          enum: [ can_customer_demo, expected_hold, product_bug, runner_blocked, unsafe ]
+        expected_holds:
+          type: array
+          items:
+            type: string
+        draft_hash:
+          type: string
+
+    TemplatePublishHelperRequest:
+      type: object
+      required: [ agent_id, evidence ]
+      properties:
+        agent_id:
+          type: string
+        evidence:
+          $ref: '#/components/schemas/TemplatePublishEvidence'
+
+    TemplatePublishHelperResponse:
+      type: object
+      required: [ ok, schema_version, status, template_id, agent_id, use_case_score_verdict, expected_holds, publish_request, next_commands ]
+      properties:
+        ok:
+          type: boolean
+        schema_version:
+          type: string
+          enum: [ template_publish_helper.v1 ]
+        status:
+          type: string
+          enum: [ publish_ready ]
+        template_id:
+          type: string
+        agent_id:
+          type: string
+        use_case_score_verdict:
+          type: string
+          enum: [ can_customer_demo, expected_hold, product_bug, runner_blocked, unsafe ]
+        expected_holds:
+          type: array
+          items:
+            type: string
+        publish_request:
+          type: object
+          required: [ path, method, body ]
+          properties:
+            path:
+              type: string
+            method:
+              type: string
+              enum: [ POST ]
+            body:
+              type: object
+              additionalProperties: true
+        next_commands:
+          type: array
+          items:
+            type: string
 
     ApplyTemplateRequest:
       type: object

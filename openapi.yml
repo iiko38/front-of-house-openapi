@@ -2101,6 +2101,104 @@ paths:
         "403":
           $ref: '#/components/responses/Forbidden'
 
+  /v1/console/voice-proof-summary:
+    get:
+      operationId: getVoiceProofSummary
+      tags: [ voice ]
+      summary: Get current voice proof ladder status and launch claim boundary
+      description: |
+        Returns the operator-facing voice proof state for the latest release
+        evidence packet in the selected environment. If no packet exists, callers
+        may provide agency setup-preview fields to see the expected fail-closed
+        voice proof status before any customer/live claim is made.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Optional release evidence environment filter.
+        - name: agency_name
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Agency name for setup-preview fallback when no release packet exists.
+        - name: source_url
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uri
+          description: Official source URL for setup-preview fallback.
+        - name: branch_location
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Branch or location for setup-preview fallback.
+        - name: tools
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Comma-separated requested tool surfaces for setup-preview fallback.
+        - name: target_mode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ founder_assisted_no_spend_demo, customer_owned_voice_trial, managed_number_live_trial, production_go_live ]
+          description: Target exposure mode for setup-preview fallback.
+      responses:
+        "200":
+          description: Voice proof operator summary
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ summary, source ]
+                properties:
+                  summary:
+                    $ref: '#/components/schemas/VoiceProofOperatorSummary'
+                  source:
+                    type: string
+                    enum: [ release_evidence, release_evidence_missing, agency_setup_preview ]
+                  setup_preview:
+                    nullable: true
+                    type: object
+                    additionalProperties: true
+                  evidence:
+                    nullable: true
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      environment:
+                        type: string
+                      artifact_sha:
+                        type: string
+                      artifact_path:
+                        nullable: true
+                        type: string
+                      pipeline_run_id:
+                        nullable: true
+                        type: string
+                      created_at:
+                        type: string
+                        format: date-time
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "500":
+          $ref: '#/components/responses/ServerError'
+
   /v1/console/speech/catalog:
     get:
       operationId: getSpeechCatalog
@@ -2229,12 +2327,12 @@ paths:
     get:
       operationId: getRealtimeProviderHealth
       tags: [ voice ]
-      summary: Get realtime provider health status
+      summary: Get media-edge realtime voice health status
       security:
         - bearerAuth: []
       responses:
         "200":
-          description: Realtime providers healthy
+          description: Media-edge realtime voice transport healthy
           content:
             application/json:
               schema:
@@ -2247,14 +2345,19 @@ paths:
                       properties:
                         provider:
                           type: string
+                          enum: [ media_edge_ws ]
                         ready:
                           type: boolean
                         status:
                           type: string
                         detail:
                           type: string
+                        checks:
+                          type: object
+                          additionalProperties:
+                            type: boolean
         "503":
-          description: One or more realtime providers unhealthy
+          description: Media-edge realtime voice transport unhealthy
           content:
             application/json:
               schema:
@@ -2768,6 +2871,50 @@ components:
           enum: [ true ]
 
     # ── Auth ───────────────────────────────────────────────────────────────────
+
+    VoiceProofOperatorSummary:
+      type: object
+      required: [ schema_version, status, source, customer_launch_ready_claim_allowed, proof_ladder, blocker_reason_codes, blocker_reason_code_count, next_command, operator_answer ]
+      properties:
+        schema_version:
+          type: string
+          enum: [ voice_proof_operator_summary.v1 ]
+        status:
+          type: string
+          enum: [ passed, failed ]
+        source:
+          type: string
+          enum: [ release_evidence, release_evidence_missing, agency_setup_preview ]
+        customer_launch_ready_claim_allowed:
+          type: boolean
+          description: True only when the current release packet permits a customer/live voice launch claim.
+        proof_ladder:
+          type: object
+          required: [ highest_passed_rung, next_blocked_rung, target_satisfied ]
+          properties:
+            highest_passed_rung:
+              nullable: true
+              type: string
+              example: L1_TIMED_TRANSCRIPT
+            next_blocked_rung:
+              nullable: true
+              type: string
+              example: L2_SYNTHETIC_AUDIO_REPLAY
+            target_satisfied:
+              type: boolean
+        blocker_reason_codes:
+          type: array
+          items:
+            type: string
+        blocker_reason_code_count:
+          type: integer
+          minimum: 0
+        next_command:
+          type: string
+          description: Operator command to run next, or `none` when voice is launch-ready.
+        operator_answer:
+          type: string
+          description: Human-readable launch-readiness answer for operators.
 
     ServiceTokenRequest:
       type: object

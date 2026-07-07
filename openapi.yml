@@ -2231,21 +2231,25 @@ paths:
                     type: array
                     items:
                       type: object
-                  voice_catalog:
-                    type: object
-                    properties:
-                      schema_version:
-                        type: string
-                      generated_at:
-                        type: string
-                      providers:
-                        type: array
-                        items:
-                          type: object
-                      voices:
-                        type: array
-                        items:
-                          type: object
+                    voice_catalog:
+                      type: object
+                      properties:
+                        schema_version:
+                          type: string
+                        generated_at:
+                          type: string
+                        providers:
+                          type: array
+                          items:
+                            type: object
+                        voices:
+                          type: array
+                          items:
+                            type: object
+                        provider_views:
+                          type: array
+                          items:
+                            type: object
         "401":
           $ref: '#/components/responses/Unauthorized'
 
@@ -2266,21 +2270,25 @@ paths:
                 properties:
                   ok:
                     type: boolean
-                  voice_catalog:
-                    type: object
-                    properties:
-                      schema_version:
-                        type: string
-                      generated_at:
-                        type: string
-                      providers:
-                        type: array
-                        items:
-                          type: object
-                      voices:
-                        type: array
-                        items:
-                          type: object
+                    voice_catalog:
+                      type: object
+                      properties:
+                        schema_version:
+                          type: string
+                        generated_at:
+                          type: string
+                        providers:
+                          type: array
+                          items:
+                            type: object
+                        voices:
+                          type: array
+                          items:
+                            type: object
+                        provider_views:
+                          type: array
+                          items:
+                            type: object
         "401":
           $ref: '#/components/responses/Unauthorized'
 

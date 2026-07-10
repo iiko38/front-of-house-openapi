@@ -6,7 +6,7 @@ info:
     name: Apache-2.0
     identifier: Apache-2.0
   description: |
-    Partner and operator surface for the Front Of House AI-agent platform.
+    Partner and team surface for the Front Of House AI-agent platform.
 
     ## Authentication
 
@@ -71,7 +71,7 @@ tags:
   - name: leads
     description: Lead management — handoff and field extraction
   - name: conversations
-    description: Conversation operations (feedback and operator reply)
+    description: Conversation operations (feedback and team reply)
   - name: webhooks
     description: Outbound webhook registration and delivery observability
   - name: org
@@ -97,16 +97,16 @@ paths:
           label: curl
           source: |
             curl --request POST "$FOH_API_URL/v1/console/auth/service-token" \\n              --header "Content-Type: application/json" \\n              --data '{
-                "email": "operator@example.com",
-                "password": "replace-with-password"
-              }'
+              "email": "team@example.com",
+              "password": "replace-with-password"
+            }'
         - lang: TypeScript
           label: TypeScript SDK
           source: |
             import { FohClient, getServiceToken } from "@front-of-house/sdk";
 
             const { token } = await getServiceToken(
-              "operator@example.com",
+              "team@example.com",
               "replace-with-password",
               process.env.FOH_API_URL,
             );
@@ -123,7 +123,7 @@ paths:
             from front_of_house_sdk import FohClient, get_service_token
 
             token_res = get_service_token(
-                "operator@example.com",
+                "team@example.com",
                 "replace-with-password",
                 api_url=os.environ["FOH_API_URL"],
             )
@@ -145,7 +145,7 @@ paths:
             schema:
               $ref: '#/components/schemas/ServiceTokenRequest'
             example:
-              email: "operator@agency.com"
+              email: "team@agency.com"
               password: "s3cr3t12"
       responses:
         "200":
@@ -657,7 +657,7 @@ paths:
       summary: Return readiness badge contract for an agent
       description: |
         Returns the current readiness level and gate state for display in
-        operator dashboards or partner integrations. Non-blocking — always
+        team dashboards or partner integrations. Non-blocking — always
         returns 200 with the current state.
       security:
         - bearerAuth: []
@@ -916,7 +916,7 @@ paths:
       summary: Hand off a lead to a human agent
       description: |
         Marks the lead as handed off and optionally assigns to a specific team
-        member. Emits a `lead.handoff` webhook event if configured. Idempotent
+        member. Emits a `lead.handed_off` webhook event if configured. Idempotent
         — repeated calls with the same reason return the current handoff state.
       security:
         - bearerAuth: []
@@ -997,13 +997,13 @@ paths:
     post:
       operationId: replyToConversation
       tags: [ conversations ]
-      summary: Queue an operator reply for a conversation
+      summary: Queue a manual reply for a conversation
       x-codeSamples:
         - lang: curl
           label: curl (WhatsApp/Instagram)
           source: |
             curl --request POST "$FOH_API_URL/v1/console/conversations/$FOH_CONVERSATION_ID/reply" \\n              --header "Authorization: Bearer $FOH_SERVICE_TOKEN" \\n              --header "x-org-id: $FOH_ORG_ID" \\n              --header "Idempotency-Key: reply-001" \\n              --header "Content-Type: application/json" \\n              --data '{
-                "content": "Human operator follow-up: we can do Tuesday at 10am.",
+                "content": "Manual follow-up: we can do Tuesday at 10am.",
                 "source": "cli"
               }'
         - lang: TypeScript
@@ -1012,7 +1012,7 @@ paths:
             const reply = await client.conversations.reply(
               process.env.FOH_CONVERSATION_ID!,
               {
-                content: "Human operator follow-up: we can do Tuesday at 10am.",
+                content: "Manual follow-up: we can do Tuesday at 10am.",
                 source: "cli",
               },
               "reply-001",
@@ -1032,14 +1032,14 @@ paths:
             reply = client.conversations.reply(
                 os.environ["FOH_CONVERSATION_ID"],
                 {
-                    "content": "Human operator follow-up: we can do Tuesday at 10am.",
+                    "content": "Manual follow-up: we can do Tuesday at 10am.",
                     "source": "cli",
                 },
                 idempotency_key="reply-001",
             )
 
       description: |
-        Persists an operator-authored assistant message and, when applicable,
+        Persists a team-authored assistant message and, when applicable,
         enqueues external delivery on the channel-delivery queue.
 
         Behavior:
@@ -1064,12 +1064,12 @@ paths:
               $ref: '#/components/schemas/ConversationReplyRequest'
             examples:
               whatsapp:
-                summary: Queue WhatsApp operator reply
+                summary: Queue WhatsApp follow-up reply
                 value:
                   content: "Thanks - I can call you back at 3pm."
                   source: "console"
               instagram:
-                summary: Queue Instagram DM operator reply
+                summary: Queue Instagram DM follow-up reply
                 value:
                   content: "Thanks for the DM - we have two flats available."
                   source: "cli"
@@ -1191,7 +1191,7 @@ paths:
             curl --request POST "$FOH_API_URL/v1/console/webhooks" \\n              --header "Authorization: Bearer $FOH_SERVICE_TOKEN" \\n              --header "x-org-id: $FOH_ORG_ID" \\n              --header "Idempotency-Key: webhook-register-001" \\n              --header "Content-Type: application/json" \\n              --data '{
                 "url": "https://example-crm.local/webhooks/foh",
                 "secret": "whsec_replace_me",
-                "events": ["lead.handoff", "conversation.feedback"]
+                "events": ["lead.qualified", "email.requested", "booking.completed"]
               }'
         - lang: TypeScript
           label: TypeScript SDK
@@ -1200,7 +1200,7 @@ paths:
               {
                 url: "https://example-crm.local/webhooks/foh",
                 secret: "whsec_replace_me",
-                events: ["lead.handoff", "conversation.feedback"],
+                events: ["lead.qualified", "email.requested", "booking.completed"],
               },
               "webhook-register-001",
             );
@@ -1220,7 +1220,7 @@ paths:
                 {
                     "url": "https://example-crm.local/webhooks/foh",
                     "secret": "whsec_replace_me",
-                    "events": ["lead.handoff", "conversation.feedback"],
+                    "events": ["lead.qualified", "email.requested", "booking.completed"],
                 },
                 idempotency_key="webhook-register-001",
             )
@@ -1228,7 +1228,9 @@ paths:
       description: |
         Creates a webhook subscription for one or more event types. The supplied
         `secret` is used to sign delivery payloads with HMAC-SHA256 so callers
-        can verify authenticity. Requires `agents:write`.
+        can verify authenticity. Use this for CRM sync, Make.com/Zapier/n8n
+        automations, customer-owned outbound email, and replayable follow-up
+        workflows. Requires `agents:write`.
       security:
         - bearerAuth: []
       parameters:
@@ -1244,8 +1246,9 @@ paths:
               url: "https://your-crm.example.com/foh-webhook"
               secret: "whsec_your_signing_secret"
               events:
-                - lead.created
-                - lead.handoff
+                - lead.qualified
+                - email.requested
+                - booking.completed
                 - agent.published
       responses:
         "200":
@@ -1322,6 +1325,44 @@ paths:
                 $ref: '#/components/schemas/WebhookDeliveriesResponse'
         "401":
           $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+
+  /v1/console/webhooks/{id}/replay:
+    post:
+      operationId: replayWebhookDelivery
+      tags: [ webhooks ]
+      summary: Replay a prior delivery for a webhook
+      description: |
+        Requeues a prior delivery using its `delivery_id`, preserving the event
+        payload while issuing a fresh delivery identifier. Use this after fixing
+        receiver auth or downstream automation issues.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/WebhookId'
+        - $ref: '#/components/parameters/OrgIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookReplayRequest'
+            example:
+              delivery_id: "76edab96-51e6-4b2d-9f27-e73ae8e9d18d"
+      responses:
+        "200":
+          description: Delivery replay queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookReplayResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
         "404":
           $ref: '#/components/responses/NotFound'
 
@@ -2107,7 +2148,7 @@ paths:
       tags: [ voice ]
       summary: Get current voice proof ladder status and launch claim boundary
       description: |
-        Returns the operator-facing voice proof state for the latest release
+        Returns the team-facing voice proof state for the latest release
         evidence packet in the selected environment. If no packet exists, callers
         may provide agency setup-preview fields to see the expected fail-closed
         voice proof status before any customer/live claim is made.
@@ -2155,7 +2196,7 @@ paths:
           description: Target exposure mode for setup-preview fallback.
       responses:
         "200":
-          description: Voice proof operator summary
+          description: Voice proof summary for launch review
           content:
             application/json:
               schema:
@@ -2919,10 +2960,10 @@ components:
           minimum: 0
         next_command:
           type: string
-          description: Operator command to run next, or `none` when voice is launch-ready.
+          description: Team command to run next, or `none` when voice is launch-ready.
         operator_answer:
           type: string
-          description: Human-readable launch-readiness answer for operators.
+          description: Human-readable launch-readiness answer for the team.
 
     ServiceTokenRequest:
       type: object
@@ -3054,7 +3095,7 @@ components:
           type: string
         plan:
           type: string
-          enum: [ bronze, silver, gold, internal ]
+          enum: [ bronze, silver, gold ]
         role:
           type: string
           enum: [ owner, admin, member, viewer ]
@@ -3092,7 +3133,7 @@ components:
     PolicyDraft:
       type: object
       description: |
-        Policy flow draft — free-form JSON conforming to the internal
+        Policy flow draft — free-form JSON conforming to the policy
         FlowDraftSchema. Use `/v1/console/agents/{id}/validate` to check
         validity before publishing. Top-level fields commonly used:
         `greeting`, `goodbye`, `nodes`, `name`, `speech_settings`.
@@ -4178,13 +4219,17 @@ components:
     WebhookEventType:
       type: string
       enum:
-        - lead.created
-        - lead.handoff
-        - lead.updated
+        - conversation.completed
+        - lead.qualified
+        - lead.handed_off
+        - callback.requested
+        - booking.completed
+        - email.requested
+        - email.sent
+        - email.failed
         - agent.published
-        - agent.rollback
-        - conversation.ended
-        - conversation.feedback_submitted
+        - incident.opened
+        - slo.breach
       description: Webhook event types
 
     RegisterWebhookRequest:
@@ -4204,6 +4249,15 @@ components:
           minItems: 1
           items:
             $ref: '#/components/schemas/WebhookEventType'
+
+    WebhookReplayRequest:
+      type: object
+      required: [ delivery_id ]
+      properties:
+        delivery_id:
+          type: string
+          format: uuid
+          description: Existing delivery identifier to replay
 
     WebhookRegistration:
       type: object
@@ -4255,18 +4309,26 @@ components:
         webhook_id:
           type: string
           format: uuid
+        delivery_id:
+          type: string
+          format: uuid
+        queue_id:
+          type: [ string, "null" ]
         event_type:
           $ref: '#/components/schemas/WebhookEventType'
         status:
           type: string
-          enum: [ success, failed, retrying ]
-        response_status:
+          enum: [ success, failed ]
+        response_code:
           type: [ integer, "null" ]
         attempt:
           type: integer
-        delivered_at:
+        attempted_at:
           type: string
           format: date-time
+        payload:
+          type: object
+          additionalProperties: true
 
     WebhookDeliveriesResponse:
       type: object
@@ -4277,22 +4339,67 @@ components:
           items:
             $ref: '#/components/schemas/WebhookDelivery'
 
+    WebhookReplayResponse:
+      type: object
+      required: [ ok, mode, webhook_id, event_type, delivery_id, replayed_delivery_id ]
+      properties:
+        ok:
+          type: boolean
+        mode:
+          type: string
+          enum: [ queued ]
+        webhook_id:
+          type: string
+          format: uuid
+        event_type:
+          $ref: '#/components/schemas/WebhookEventType'
+        delivery_id:
+          type: string
+          format: uuid
+        replayed_delivery_id:
+          type: string
+          format: uuid
+
     WebhookObservabilityResponse:
       type: object
       properties:
+        ok:
+          type: boolean
+        window_hours:
+          type: integer
+        active_webhooks:
+          type: integer
         total_attempts:
           type: integer
-        success_count:
+        backlog_failed_attempts:
           type: integer
-        failure_count:
+        queue_pending:
           type: integer
-        failure_rate:
+        queue_processing:
+          type: integer
+        queue_failed_terminal:
+          type: integer
+        backpressure_ratio:
           type: number
           format: float
-        backpressure_active:
-          type: boolean
-        hours:
-          type: integer
+        events:
+          type: array
+          items:
+            type: object
+            properties:
+              event_type:
+                $ref: '#/components/schemas/WebhookEventType'
+              attempts:
+                type: integer
+              success:
+                type: integer
+              failed:
+                type: integer
+              retry_attempts:
+                type: integer
+              failure_rate_pct:
+                type: number
+                format: float
 
     # ── Org ───────────────────────────────────────────────────────────────────
 
@@ -4320,7 +4427,7 @@ components:
           type: string
         plan:
           type: string
-          enum: [ bronze, silver, gold, internal ]
+          enum: [ bronze, silver, gold ]
         note:
           type: string
           enum: [ already_exists ]
